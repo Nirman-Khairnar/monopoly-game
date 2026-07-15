@@ -19,6 +19,7 @@ export function MonopolyGame() {
   const [state, dispatch] = useReducer(gameReducer, undefined, createInitialState)
   const [inspectedTile, setInspectedTile] = useState<number | null>(null)
   const [showManage, setShowManage] = useState(false)
+  const [showTrade, setShowTrade] = useState(false)
 
   if (state.phase === "setup") {
     return (
@@ -38,7 +39,12 @@ export function MonopolyGame() {
 
         {/* Side panel */}
         <div className="flex flex-col gap-3 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)]">
-          <ActionPanel state={state} dispatch={dispatch} onManageProperties={() => setShowManage(true)} />
+          <ActionPanel
+            state={state}
+            dispatch={dispatch}
+            onManageProperties={() => setShowManage(true)}
+            onTrade={() => setShowTrade(true)}
+          />
           <div className="h-56 lg:h-auto lg:min-h-0 lg:flex-1">
             <div className="flex h-full flex-col">
               <EventLog entries={state.log} />
@@ -53,6 +59,9 @@ export function MonopolyGame() {
       {state.phase === "card" && <CardModal state={state} dispatch={dispatch} />}
       {showManage && state.phase !== "game-over" && (
         <ManageModal state={state} dispatch={dispatch} onClose={() => setShowManage(false)} />
+      )}
+      {showTrade && (state.phase === "awaiting-roll" || state.phase === "end-turn") && (
+        <TradeModal state={state} dispatch={dispatch} onClose={() => setShowTrade(false)} />
       )}
       {inspectedTile !== null && (
         <TileInfoModal state={state} position={inspectedTile} onClose={() => setInspectedTile(null)} />

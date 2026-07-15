@@ -29,6 +29,9 @@ export function TileInfoModal({
               {owner ? (
                 <>
                   Owned by <span className="font-bold">{owner.name}</span>
+                  {ps.mortgaged && (
+                    <span className="font-semibold text-orange-600 dark:text-orange-400"> — mortgaged (no rent)</span>
+                  )}
                   {ps.houses > 0 && (
                     <span className="text-muted-foreground">
                       {" "}

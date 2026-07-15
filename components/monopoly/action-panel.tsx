@@ -1,6 +1,6 @@
 "use client"
 
-import { Dices, KeyRound, Lock, RotateCcw, SkipForward, Ticket } from "lucide-react"
+import { ArrowLeftRight, Dices, KeyRound, Lock, RotateCcw, SkipForward, Ticket } from "lucide-react"
 import { JAIL_FINE, PLAYER_TOKENS } from "@/lib/monopoly/board-data"
 import type { GameAction, GameState } from "@/lib/monopoly/types"
 import { PlayerTokenBadge } from "./player-token"
@@ -10,13 +10,17 @@ export function ActionPanel({
   state,
   dispatch,
   onManageProperties,
+  onTrade,
 }: {
   state: GameState
   dispatch: (action: GameAction) => void
   onManageProperties: () => void
+  onTrade: () => void
 }) {
   const current = state.players[state.currentPlayerIndex]
   if (!current) return null
+
+  const otherActive = state.players.some((p) => !p.bankrupt && p.id !== current.id)
 
   const rollAgain =
     state.phase === "end-turn" && state.lastRollWasDoubles && !state.turnEndsAfterResolve && !current.inJail && !current.bankrupt
@@ -105,13 +109,25 @@ export function ActionPanel({
         )}
 
         {(state.phase === "awaiting-roll" || state.phase === "end-turn") && (
-          <button
-            type="button"
-            onClick={onManageProperties}
-            className="inline-flex items-center justify-center rounded-lg border px-3 py-2.5 text-sm font-semibold transition-colors hover:bg-accent"
-          >
-            Build
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={onManageProperties}
+              className="inline-flex items-center justify-center rounded-lg border px-3 py-2.5 text-sm font-semibold transition-colors hover:bg-accent"
+            >
+              Manage
+            </button>
+            {otherActive && (
+              <button
+                type="button"
+                onClick={onTrade}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold transition-colors hover:bg-accent"
+              >
+                <ArrowLeftRight className="size-4" aria-hidden="true" />
+                Trade
+              </button>
+            )}
+          </>
         )}
       </div>
 
