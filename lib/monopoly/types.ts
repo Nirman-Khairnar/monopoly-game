@@ -54,6 +54,7 @@ export interface Player {
 export interface PropertyState {
   ownerId: number | null
   houses: number // 0-4 houses, 5 = hotel
+  mortgaged: boolean
 }
 
 export type CardEffect =
@@ -128,5 +129,15 @@ export type GameAction =
   | { type: "USE_JAIL_CARD" }
   | { type: "BUILD_HOUSE"; position: number }
   | { type: "SELL_HOUSE"; position: number }
+  | { type: "MORTGAGE"; position: number }
+  | { type: "UNMORTGAGE"; position: number }
+  | {
+      type: "EXECUTE_TRADE"
+      partnerId: number
+      giveProps: number[]
+      getProps: number[]
+      giveMoney: number
+      getMoney: number
+    }
   | { type: "END_TURN" }
   | { type: "NEW_GAME" }

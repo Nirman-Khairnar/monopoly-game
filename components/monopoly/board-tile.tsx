@@ -142,6 +142,16 @@ export function BoardTile({
         />
       )}
 
+      {/* Mortgaged marker */}
+      {propertyState?.mortgaged && (
+        <span
+          className="absolute bottom-0.5 left-0.5 z-10 rounded-sm bg-orange-600 px-0.5 text-[6px] font-black leading-tight text-white md:text-[8px]"
+          title="Mortgaged"
+        >
+          M
+        </span>
+      )}
+
       {/* Player tokens */}
       {playersHere.length > 0 && (
         <div className="absolute inset-0 z-20 flex items-center justify-center">

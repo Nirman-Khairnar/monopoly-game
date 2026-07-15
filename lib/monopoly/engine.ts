@@ -41,7 +41,7 @@ export function ownsFullGroup(state: GameState, playerId: number, position: numb
 export function calculateRent(state: GameState, position: number, diceTotal: number, multiplierOverride?: "double-rail" | "ten-x-utility"): number {
   const tile = BOARD[position]
   const ps = state.properties[position]
-  if (!ps || ps.ownerId === null) return 0
+  if (!ps || ps.ownerId === null || ps.mortgaged) return 0
   const ownerId = ps.ownerId
 
   if (tile.type === "property" && tile.rents) {
@@ -62,9 +62,84 @@ export function calculateRent(state: GameState, position: number, diceTotal: num
   return 0
 }
 
+// ---------------------------------------------------------------------------
+// Mortgage helpers
+// ---------------------------------------------------------------------------
+
+export function mortgageValue(position: number): number {
+  return Math.floor((BOARD[position].price ?? 0) / 2)
+}
+
+export function unmortgageCost(position: number): number {
+  return Math.ceil(mortgageValue(position) * 1.1)
+}
+
+export function canMortgage(state: GameState, playerId: number, position: number): boolean {
+  const tile = BOARD[position]
+  const ps = state.properties[position]
+  if (!ps || ps.ownerId !== playerId || ps.mortgaged) return false
+  // Cannot mortgage while any property in the color group has buildings
+  if (tile.group) {
+    const hasBuildings = groupMembers(tile.group).some((id) => state.properties[id].houses > 0)
+    if (hasBuildings) return false
+  }
+  return true
+}
+
+export function canUnmortgage(state: GameState, playerId: number, position: number): boolean {
+  const ps = state.properties[position]
+  if (!ps || ps.ownerId !== playerId || !ps.mortgaged) return false
+  const player = state.players.find((p) => p.id === playerId)!
+  return player.money >= unmortgageCost(position)
+}
+
+/** Forced liquidation: sell buildings and mortgage properties until the player can cover `needed`. */
+function autoLiquidate(state: GameState, playerId: number, needed: number): GameState {
+  let s = state
+  const money = () => s.players.find((p) => p.id === playerId)!.money
+
+  // 1) Sell buildings (highest refund first, respecting the even-build rule)
+  let guard = 200
+  while (money() < needed && guard-- > 0) {
+    const sellable = ownedPositions(s, playerId)
+      .filter((pos) => canSellHouse(s, playerId, pos))
+      .sort((a, b) => (BOARD[b].houseCost ?? 0) - (BOARD[a].houseCost ?? 0))
+    if (sellable.length === 0) break
+    const pos = sellable[0]
+    const tile = BOARD[pos]
+    const refund = Math.floor((tile.houseCost ?? 0) / 2)
+    const ps = s.properties[pos]
+    s = updatePlayer(s, playerId, { money: money() + refund })
+    s = { ...s, properties: { ...s.properties, [pos]: { ...ps, houses: ps.houses - 1 } } }
+    s = log(s, `${s.players.find((p) => p.id === playerId)!.name} is forced to sell a building on ${tile.name} for $${refund}.`, "alert")
+  }
+
+  // 2) Mortgage properties (cheapest first, to preserve the most valuable holdings)
+  guard = 100
+  while (money() < needed && guard-- > 0) {
+    const mortgageable = ownedPositions(s, playerId)
+      .filter((pos) => canMortgage(s, playerId, pos))
+      .sort((a, b) => (BOARD[a].price ?? 0) - (BOARD[b].price ?? 0))
+    if (mortgageable.length === 0) break
+    const pos = mortgageable[0]
+    const value = mortgageValue(pos)
+    const ps = s.properties[pos]
+    s = updatePlayer(s, playerId, { money: money() + value })
+    s = { ...s, properties: { ...s.properties, [pos]: { ...ps, mortgaged: true } } }
+    s = log(s, `${s.players.find((p) => p.id === playerId)!.name} is forced to mortgage ${BOARD[pos].name} for $${value}.`, "alert")
+  }
+
+  return s
+}
+
 /** Deduct money from a player; handles bankruptcy (assets go to creditor or bank). */
 function chargePlayer(state: GameState, payerId: number, amount: number, recipientId: number | null): GameState {
-  const payer = state.players.find((p) => p.id === payerId)!
+  let payer = state.players.find((p) => p.id === payerId)!
+  // Try forced liquidation before declaring bankruptcy
+  if (payer.money < amount) {
+    state = autoLiquidate(state, payerId, amount)
+    payer = state.players.find((p) => p.id === payerId)!
+  }
   if (payer.money >= amount) {
     let s = updatePlayer(state, payerId, { money: payer.money - amount })
     if (recipientId !== null) {
@@ -81,7 +156,8 @@ function chargePlayer(state: GameState, payerId: number, amount: number, recipie
   const newProps: Record<number, PropertyState> = { ...s.properties }
   for (const [pos, ps] of Object.entries(newProps)) {
     if (ps.ownerId === payerId) {
-      newProps[Number(pos)] = { ownerId: recipientId, houses: 0 }
+      // Bank reclaims properties clean; a creditor inherits mortgage status
+      newProps[Number(pos)] = { ownerId: recipientId, houses: 0, mortgaged: recipientId === null ? false : ps.mortgaged }
     }
   }
   s = { ...s, properties: newProps }
@@ -113,11 +189,12 @@ function sendToJail(state: GameState, playerId: number): GameState {
   return { ...s, turnEndsAfterResolve: true, phase: "end-turn" }
 }
 
-/** Move a player forward/to a position, crediting GO salary when passed. */
+/** Move a player forward/to a position, crediting GO salary when passed.
+ *  Landing exactly on GO is credited by the GO tile resolution, not here. */
 function movePlayerTo(state: GameState, playerId: number, newPosition: number, collectGo: boolean): GameState {
   const player = state.players.find((p) => p.id === playerId)!
   let s = state
-  if (collectGo && newPosition < player.position) {
+  if (collectGo && newPosition !== 0 && newPosition < player.position) {
     s = updatePlayer(s, playerId, { money: player.money + GO_SALARY })
     s = log(s, `${player.name} passes GO and collects $${GO_SALARY}.`, "money-up")
   }
@@ -153,6 +230,10 @@ function resolveTile(state: GameState, rentOverride?: "double-rail" | "ten-x-uti
         return { ...s, phase: "end-turn" }
       }
       const owner = s.players.find((p) => p.id === ps.ownerId)!
+      if (ps.mortgaged) {
+        s = log(s, `${tile.name} is mortgaged — ${player.name} owes no rent.`)
+        return { ...s, phase: "end-turn" }
+      }
       const rent = calculateRent(s, tile.id, diceTotal, rentOverride)
       s = log(s, `${player.name} pays $${rent} rent to ${owner.name} for ${tile.name}.`, "money-down")
       s = chargePlayer(s, player.id, rent, owner.id)
@@ -302,6 +383,8 @@ export function canBuildHouse(state: GameState, playerId: number, position: numb
   const ps = state.properties[position]
   if (!ps || ps.ownerId !== playerId || ps.houses >= 5) return false
   if (!ownsFullGroup(state, playerId, position)) return false
+  // Cannot build while any property in the group is mortgaged
+  if (groupMembers(tile.group).some((id) => state.properties[id].mortgaged)) return false
   const player = state.players.find((p) => p.id === playerId)!
   if (player.money < tile.houseCost) return false
   // Even-build rule: cannot build if this tile already has more houses than the group minimum
@@ -382,7 +465,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const properties: Record<number, PropertyState> = {}
       for (const tile of BOARD) {
         if (tile.type === "property" || tile.type === "railroad" || tile.type === "utility") {
-          properties[tile.id] = { ownerId: null, houses: 0 }
+          properties[tile.id] = { ownerId: null, houses: 0, mortgaged: false }
         }
       }
       let s: GameState = { ...createInitialState(), phase: "awaiting-roll", players, properties }
@@ -455,7 +538,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const price = tile.price ?? 0
       if (player.money < price) return state
       let s = updatePlayer(state, player.id, { money: player.money - price })
-      s = { ...s, properties: { ...s.properties, [tile.id]: { ownerId: player.id, houses: 0 } } }
+      s = { ...s, properties: { ...s.properties, [tile.id]: { ownerId: player.id, houses: 0, mortgaged: false } } }
       s = log(s, `${player.name} buys ${tile.name} for $${price}.`, "money-up")
       return { ...s, phase: "end-turn" }
     }
@@ -511,7 +594,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         if (a.highestBidderId !== null && remaining.includes(a.highestBidderId)) {
           const winner = s.players.find((p) => p.id === a.highestBidderId)!
           s = updatePlayer(s, winner.id, { money: winner.money - a.currentBid })
-          s = { ...s, properties: { ...s.properties, [a.position]: { ownerId: winner.id, houses: 0 } } }
+          s = { ...s, properties: { ...s.properties, [a.position]: { ownerId: winner.id, houses: 0, mortgaged: false } } }
           s = log(s, `${winner.name} wins the auction for ${BOARD[a.position].name} at $${a.currentBid}!`, "money-up")
         } else {
           s = log(s, `Everyone passed. ${BOARD[a.position].name} remains unsold.`, "system")
@@ -572,6 +655,72 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       let s = updatePlayer(state, player.id, { money: player.money + refund })
       s = { ...s, properties: { ...s.properties, [action.position]: { ...ps, houses: ps.houses - 1 } } }
       s = log(s, `${player.name} sells a building on ${tile.name} for $${refund}.`, "money-up")
+      return s
+    }
+
+    case "MORTGAGE": {
+      const player = currentPlayer(state)
+      if (state.phase !== "awaiting-roll" && state.phase !== "end-turn") return state
+      if (!canMortgage(state, player.id, action.position)) return state
+      const value = mortgageValue(action.position)
+      const ps = state.properties[action.position]
+      let s = updatePlayer(state, player.id, { money: player.money + value })
+      s = { ...s, properties: { ...s.properties, [action.position]: { ...ps, mortgaged: true } } }
+      s = log(s, `${player.name} mortgages ${BOARD[action.position].name} for $${value}.`, "money-up")
+      return s
+    }
+
+    case "UNMORTGAGE": {
+      const player = currentPlayer(state)
+      if (state.phase !== "awaiting-roll" && state.phase !== "end-turn") return state
+      if (!canUnmortgage(state, player.id, action.position)) return state
+      const cost = unmortgageCost(action.position)
+      const ps = state.properties[action.position]
+      let s = updatePlayer(state, player.id, { money: player.money - cost })
+      s = { ...s, properties: { ...s.properties, [action.position]: { ...ps, mortgaged: false } } }
+      s = log(s, `${player.name} pays off the mortgage on ${BOARD[action.position].name} for $${cost}.`, "money-down")
+      return s
+    }
+
+    case "EXECUTE_TRADE": {
+      if (state.phase !== "awaiting-roll" && state.phase !== "end-turn") return state
+      const player = currentPlayer(state)
+      const partner = state.players.find((p) => p.id === action.partnerId)
+      if (!partner || partner.bankrupt || partner.id === player.id) return state
+      if (action.giveMoney < 0 || action.getMoney < 0) return state
+      if (player.money < action.giveMoney || partner.money < action.getMoney) return state
+      if (action.giveProps.length === 0 && action.getProps.length === 0 && action.giveMoney === 0 && action.getMoney === 0) return state
+
+      // Traded properties must be owned by the right side and their color groups free of buildings
+      const validSide = (props: number[], ownerId: number) =>
+        props.every((pos) => {
+          const ps = state.properties[pos]
+          if (!ps || ps.ownerId !== ownerId) return false
+          const tile = BOARD[pos]
+          if (tile.group && groupMembers(tile.group).some((id) => state.properties[id].houses > 0)) return false
+          return true
+        })
+      if (!validSide(action.giveProps, player.id) || !validSide(action.getProps, partner.id)) return state
+
+      let s = updatePlayer(state, player.id, { money: player.money - action.giveMoney + action.getMoney })
+      const partnerNow = s.players.find((p) => p.id === partner.id)!
+      s = updatePlayer(s, partner.id, { money: partnerNow.money - action.getMoney + action.giveMoney })
+
+      const newProps = { ...s.properties }
+      for (const pos of action.giveProps) newProps[pos] = { ...newProps[pos], ownerId: partner.id }
+      for (const pos of action.getProps) newProps[pos] = { ...newProps[pos], ownerId: player.id }
+      s = { ...s, properties: newProps }
+
+      const describe = (props: number[], money: number) => {
+        const parts = props.map((pos) => BOARD[pos].name)
+        if (money > 0) parts.push(`$${money}`)
+        return parts.length > 0 ? parts.join(", ") : "nothing"
+      }
+      s = log(
+        s,
+        `Trade: ${player.name} gives ${describe(action.giveProps, action.giveMoney)} to ${partner.name} for ${describe(action.getProps, action.getMoney)}.`,
+        "system",
+      )
       return s
     }
 
