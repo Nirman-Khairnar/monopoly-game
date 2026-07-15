@@ -42,6 +42,12 @@ export default function RootLayout({
   return (
     <html lang="en" className="bg-background">
       <body className="antialiased">
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "window.__v0err=[];window.addEventListener('error',function(e){window.__v0err.push(String((e.error&&e.error.stack)||e.message))});var _ce=console.error;console.error=function(){try{window.__v0err.push('CE:'+Array.from(arguments).map(function(a){return (a&&a.stack)||String(a)}).join(' '))}catch(x){}return _ce.apply(console,arguments)};",
+          }}
+        />
         {children}
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
