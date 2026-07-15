@@ -14,6 +14,7 @@ import { PlayerSetup } from "./player-setup"
 import { PlayerTokenBadge } from "./player-token"
 import { PropertyModal } from "./property-modal"
 import { TileInfoModal } from "./tile-info-modal"
+import { TradeModal } from "./trade-modal"
 
 export function MonopolyGame() {
   const [state, dispatch] = useReducer(gameReducer, undefined, createInitialState)
